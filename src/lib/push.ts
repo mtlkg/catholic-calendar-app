@@ -1,4 +1,10 @@
 import { supabase } from "@/integrations/supabase/client";
+import {
+  currentNativeToken,
+  disableNativePush,
+  enableNativePush,
+  nativePushAvailable,
+} from "@/lib/nativePush";
 
 /** Public VAPID key (safe to ship in the browser). */
 const VAPID_PUBLIC_KEY =
@@ -24,7 +30,7 @@ function bufToB64url(buf: ArrayBuffer | null): string {
 }
 
 /** True when this browser can receive web push notifications. */
-export function pushSupported(): boolean {
+function webPushSupported(): boolean {
   return (
     typeof window !== "undefined" &&
     "serviceWorker" in navigator &&
@@ -33,19 +39,25 @@ export function pushSupported(): boolean {
   );
 }
 
+/** True when this device can receive push notifications — native app or web push. */
+export function pushSupported(): boolean {
+  return nativePushAvailable() || webPushSupported();
+}
+
 /** True on iOS Safari when the site has not been added to the home screen. */
 export function needsHomeScreenInstall(): boolean {
-  if (typeof window === "undefined") return false;
+  if (typeof window === "undefined" || nativePushAvailable()) return false;
   const ua = navigator.userAgent;
   const isIOS = /iPad|iPhone|iPod/.test(ua) ||
     (navigator.platform === "MacIntel" && (navigator as any).maxTouchPoints > 1);
   const standalone = window.matchMedia?.("(display-mode: standalone)")?.matches ||
     (navigator as any).standalone === true;
-  return isIOS && !standalone && !pushSupported();
+  return isIOS && !standalone && !webPushSupported();
 }
 
 export function pushPermission(): NotificationPermission | "unsupported" {
-  return pushSupported() ? Notification.permission : "unsupported";
+  if (nativePushAvailable()) return "default";
+  return webPushSupported() ? Notification.permission : "unsupported";
 }
 
 async function getRegistration(): Promise<ServiceWorkerRegistration> {
@@ -54,9 +66,10 @@ async function getRegistration(): Promise<ServiceWorkerRegistration> {
   return reg;
 }
 
-/** Returns the endpoint of the existing subscription on this device, if any. */
+/** Returns the endpoint/token of the existing subscription on this device, if any. */
 export async function currentPushEndpoint(): Promise<string | null> {
-  if (!pushSupported()) return null;
+  if (nativePushAvailable()) return currentNativeToken();
+  if (!webPushSupported()) return null;
   try {
     const reg = await navigator.serviceWorker.getRegistration(SW_URL);
     const sub = await reg?.pushManager.getSubscription();
@@ -68,10 +81,11 @@ export async function currentPushEndpoint(): Promise<string | null> {
 
 /**
  * Asks for permission (if needed), subscribes this device and stores the
- * subscription server-side. Returns the endpoint, or null when declined.
+ * subscription server-side. Returns the endpoint/token, or null when declined.
  */
 export async function enablePush(locale = "en"): Promise<string | null> {
-  if (!pushSupported()) return null;
+  if (nativePushAvailable()) return enableNativePush(locale);
+  if (!webPushSupported()) return null;
 
   const permission = Notification.permission === "granted"
     ? "granted"
@@ -99,7 +113,8 @@ export async function enablePush(locale = "en"): Promise<string | null> {
 
 /** Unsubscribes this device and removes the stored subscription. */
 export async function disablePush(): Promise<void> {
-  if (!pushSupported()) return;
+  if (nativePushAvailable()) return disableNativePush();
+  if (!webPushSupported()) return;
   const reg = await navigator.serviceWorker.getRegistration(SW_URL);
   const sub = await reg?.pushManager.getSubscription();
   if (sub) {

@@ -7,6 +7,8 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
 import { normalizeLocale, renderPush, type PushTemplate } from "../_shared/push-templates.ts";
 import { sendWebPush } from "../_shared/webpush.ts";
+import { loadServiceAccount, sendFcm } from "../_shared/fcm.ts";
+import { loadApnsConfig, sendApns } from "../_shared/apns.ts";
 
 function isInternalCaller(req: Request): boolean {
   const auth = req.headers.get("Authorization") || req.headers.get("authorization") || "";
@@ -48,17 +50,25 @@ Deno.serve(async (req) => {
   const userId: string | null = payload?.userId ?? null;
   const endpoints: string[] = Array.isArray(payload?.endpoints) ? payload.endpoints : [];
 
+  const deviceTokens: string[] = Array.isArray(payload?.deviceTokens) ? payload.deviceTokens : [];
+
   if (!template) return json({ error: "templateName required" }, 400);
-  if (!userId && endpoints.length === 0) return json({ ok: true, skipped: "no_target" });
+  if (!userId && endpoints.length === 0 && deviceTokens.length === 0) {
+    return json({ ok: true, skipped: "no_target" });
+  }
 
   const privateJwkRaw = Deno.env.get("VAPID_PRIVATE_JWK");
   const publicKey = Deno.env.get("VAPID_PUBLIC_KEY");
   const subject = Deno.env.get("VAPID_SUBJECT") || "mailto:globalcatholiccalendar@gmail.com";
-  if (!privateJwkRaw || !publicKey) {
-    console.error("send-push: VAPID keys are not configured");
+  const privateJwk = privateJwkRaw ? (JSON.parse(privateJwkRaw) as JsonWebKey) : null;
+  const webPushReady = !!(privateJwk && publicKey);
+
+  const fcmServiceAccount = loadServiceAccount();
+  const apnsConfig = loadApnsConfig();
+  if (!webPushReady && !fcmServiceAccount && !apnsConfig) {
+    console.error("send-push: no push provider is configured (web, FCM, or APNs)");
     return json({ error: "push not configured" }, 503);
   }
-  const privateJwk = JSON.parse(privateJwkRaw) as JsonWebKey;
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
@@ -81,38 +91,93 @@ Deno.serve(async (req) => {
     for (const r of rows ?? []) subs.set((r as any).endpoint, r as any);
   }
 
-  if (subs.size === 0) return json({ ok: true, skipped: "no_subscriptions" });
+  const devices = new Map<string, { token: string; platform: "ios" | "android"; locale: string }>();
+  if (userId) {
+    const { data: rows } = await supabase
+      .from("push_device_tokens")
+      .select("token, platform, locale")
+      .eq("user_id", userId);
+    for (const r of rows ?? []) devices.set((r as any).token, r as any);
+  }
+  if (deviceTokens.length > 0) {
+    const { data: rows } = await supabase
+      .from("push_device_tokens")
+      .select("token, platform, locale")
+      .in("token", deviceTokens);
+    for (const r of rows ?? []) devices.set((r as any).token, r as any);
+  }
+
+  if (subs.size === 0 && devices.size === 0) return json({ ok: true, skipped: "no_subscriptions" });
 
   let sent = 0;
-  const dead: string[] = [];
+  const deadEndpoints: string[] = [];
+  const deadTokens: string[] = [];
   const errors: unknown[] = [];
+  const tag = `${template}-${data.id ?? ""}`;
 
-  for (const sub of subs.values()) {
-    const loc = normalizeLocale(payload?.locale ?? sub.locale) ?? locale;
-    let built;
+  const buildOrNull = (loc: ReturnType<typeof normalizeLocale>) => {
     try {
-      built = renderPush(template, loc, data);
+      return renderPush(template, loc, data);
     } catch (err) {
-      return json({ error: (err as Error).message }, 400);
+      errors.push({ error: (err as Error).message });
+      return null;
     }
+  };
+
+  if (webPushReady) {
+    for (const sub of subs.values()) {
+      const built = buildOrNull(normalizeLocale(payload?.locale ?? sub.locale) ?? locale);
+      if (!built) continue;
+      try {
+        const res = await sendWebPush(sub, { title: built.title, body: built.body, url, tag }, {
+          privateJwk: privateJwk!,
+          publicKey: publicKey!,
+          subject,
+        });
+        if (res.ok) sent++;
+        else if (res.gone) deadEndpoints.push(sub.endpoint);
+        else errors.push({ endpoint: sub.endpoint, status: res.status, body: res.body });
+      } catch (err) {
+        errors.push({ endpoint: sub.endpoint, error: String(err) });
+      }
+    }
+  } else if (subs.size > 0) {
+    console.warn("send-push: web subscriptions present but VAPID keys are not configured");
+  }
+
+  for (const device of devices.values()) {
+    const built = buildOrNull(normalizeLocale(payload?.locale ?? device.locale) ?? locale);
+    if (!built) continue;
     try {
-      const res = await sendWebPush(sub, {
-        title: built.title,
-        body: built.body,
-        url,
-        tag: `${template}-${data.id ?? ""}`,
-      }, { privateJwk, publicKey, subject });
-      if (res.ok) sent++;
-      else if (res.gone) dead.push(sub.endpoint);
-      else errors.push({ endpoint: sub.endpoint, status: res.status, body: res.body });
+      if (device.platform === "android") {
+        if (!fcmServiceAccount) continue;
+        const res = await sendFcm(fcmServiceAccount, device.token, { title: built.title, body: built.body, url, tag });
+        if (res.ok) sent++;
+        else if (res.gone) deadTokens.push(device.token);
+        else errors.push({ token: device.token, status: res.status, body: res.body });
+      } else {
+        if (!apnsConfig) continue;
+        const res = await sendApns(apnsConfig, device.token, { title: built.title, body: built.body, url, tag });
+        if (res.ok) sent++;
+        else if (res.gone) deadTokens.push(device.token);
+        else errors.push({ token: device.token, status: res.status, body: res.body });
+      }
     } catch (err) {
-      errors.push({ endpoint: sub.endpoint, error: String(err) });
+      errors.push({ token: device.token, error: String(err) });
     }
   }
 
-  if (dead.length > 0) {
-    await supabase.from("push_subscriptions").delete().in("endpoint", dead);
+  if (deadEndpoints.length > 0) {
+    await supabase.from("push_subscriptions").delete().in("endpoint", deadEndpoints);
+  }
+  if (deadTokens.length > 0) {
+    await supabase.from("push_device_tokens").delete().in("token", deadTokens);
   }
 
-  return json({ ok: true, sent, pruned: dead.length, errors: errors.slice(0, 5) });
+  return json({
+    ok: true,
+    sent,
+    pruned: deadEndpoints.length + deadTokens.length,
+    errors: errors.slice(0, 5),
+  });
 });
