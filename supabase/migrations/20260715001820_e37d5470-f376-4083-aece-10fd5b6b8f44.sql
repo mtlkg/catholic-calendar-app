@@ -1,0 +1,1 @@
+REVOKE EXECUTE ON FUNCTION public.prevent_owner_status_change() FROM PUBLIC, anon, authenticated;

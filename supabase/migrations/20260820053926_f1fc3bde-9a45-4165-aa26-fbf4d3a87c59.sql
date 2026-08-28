@@ -1,0 +1,1 @@
+ALTER TABLE public.dm_group_members ADD COLUMN IF NOT EXISTS muted boolean NOT NULL DEFAULT false;

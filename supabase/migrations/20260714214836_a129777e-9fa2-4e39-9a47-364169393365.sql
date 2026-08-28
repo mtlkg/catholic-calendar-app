@@ -1,0 +1,1 @@
+INSERT INTO public.suppressed_emails (email, reason) VALUES ('stkevinqc@gmail.com', 'unsubscribe') ON CONFLICT (email) DO NOTHING;

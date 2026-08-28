@@ -1,0 +1,1 @@
+ALTER TABLE public.dinner_rsvps ADD COLUMN IF NOT EXISTS additional_pizza_guests INTEGER NOT NULL DEFAULT 0;

@@ -1,0 +1,1 @@
+REVOKE EXECUTE ON FUNCTION public.dispatch_event_reminders() FROM anon, authenticated, PUBLIC;

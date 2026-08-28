@@ -1,0 +1,1 @@
+REVOKE EXECUTE ON FUNCTION public.require_phone_for_unverified() FROM PUBLIC, anon, authenticated;

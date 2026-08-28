@@ -1,0 +1,1 @@
+ALTER TABLE public.orders ADD COLUMN stripe_session_id text;

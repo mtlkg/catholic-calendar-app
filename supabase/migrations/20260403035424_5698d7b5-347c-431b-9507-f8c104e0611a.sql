@@ -1,0 +1,1 @@
+DROP TRIGGER IF EXISTS on_grand_prize_order ON public.orders;

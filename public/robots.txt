@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /catholic-calendar/admin
+Disallow: /catholic-calendar/dashboard
+Disallow: /catholic-calendar/auth
+Disallow: /catholic-calendar/checkout
+Disallow: /unsubscribe
+
+Sitemap: https://thecatholiccalendar.org/sitemap.xml

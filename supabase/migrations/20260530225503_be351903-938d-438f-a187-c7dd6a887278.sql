@@ -1,0 +1,1 @@
+ALTER TABLE public.gift_raffle_items ADD COLUMN IF NOT EXISTS website_urls text[];

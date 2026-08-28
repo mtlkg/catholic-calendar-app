@@ -1,0 +1,1 @@
+REVOKE SELECT (contact_email, contact_phone) ON public.organizer_profiles FROM anon, authenticated;

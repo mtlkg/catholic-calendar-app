@@ -1,0 +1,1 @@
+ALTER TABLE public.tickets ADD CONSTRAINT tickets_code_type_unique UNIQUE (ticket_code, ticket_type);

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX IF NOT EXISTS tickets_grand_prize_code_unique ON public.tickets (ticket_code) WHERE ticket_type = 'grand_prize';

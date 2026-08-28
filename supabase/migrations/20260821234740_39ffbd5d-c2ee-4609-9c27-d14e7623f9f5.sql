@@ -1,0 +1,1 @@
+ALTER FUNCTION public.delete_my_event_series(uuid) SECURITY INVOKER;

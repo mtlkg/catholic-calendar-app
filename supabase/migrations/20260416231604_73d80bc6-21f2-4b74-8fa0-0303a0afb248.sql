@@ -1,0 +1,1 @@
+ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS dropped_in_box boolean NOT NULL DEFAULT false;

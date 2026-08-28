@@ -1,0 +1,1 @@
+ALTER TABLE public.organizer_profiles ADD COLUMN IF NOT EXISTS representative_name text;

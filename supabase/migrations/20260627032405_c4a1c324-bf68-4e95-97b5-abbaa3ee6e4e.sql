@@ -1,0 +1,2 @@
+UPDATE public.organizer_profiles SET status = 'approved' WHERE id = 'af1acdcb-e921-47e5-aeb7-40066dcb1fa6';
+INSERT INTO public.user_roles (user_id, role) VALUES ('ae9e5b58-fddf-4d1f-aeb4-99af24de51a1', 'admin');

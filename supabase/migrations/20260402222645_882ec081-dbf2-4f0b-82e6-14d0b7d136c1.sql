@@ -1,0 +1,1 @@
+CREATE POLICY "Anyone can view orders" ON public.orders FOR SELECT TO public USING (true);

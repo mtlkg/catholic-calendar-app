@@ -1,0 +1,49 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Secrets — never commit real keys
+.env
+.env.development
+.env.production
+!.env.example
+
+# Capacitor native projects: the ios/ and android/ folders themselves ARE
+# committed (they hold hand-edited config — permissions, capabilities,
+# signing setup — that `npx cap sync` does not regenerate). Only their
+# build output, dependency caches and real credential files are ignored.
+ios/App/Pods
+ios/App/build
+ios/App/DerivedData
+ios/App/output
+android/.gradle
+android/app/build
+android/build
+android/local.properties
+android/app/*.keystore
+android/key.properties
+
+# Real Firebase/APNs credentials — never commit, drop your own in locally
+android/app/google-services.json
+ios/App/App/GoogleService-Info.plist
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

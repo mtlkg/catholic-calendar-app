@@ -1,0 +1,1 @@
+DELETE FROM orders WHERE customer_name = 'Marie Tremblay' AND customer_email = 'marie.tremblay@example.com';

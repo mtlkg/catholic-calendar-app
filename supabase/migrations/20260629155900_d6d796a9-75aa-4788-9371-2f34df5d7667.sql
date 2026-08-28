@@ -1,0 +1,1 @@
+ALTER VIEW public.calendar_events_public SET (security_invoker = true);

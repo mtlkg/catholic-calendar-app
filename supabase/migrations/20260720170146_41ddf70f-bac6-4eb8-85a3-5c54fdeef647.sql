@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS idx_discussion_threads_author_created ON public.discussion_threads (author_user_id, created_at DESC);

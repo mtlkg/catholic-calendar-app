@@ -1,0 +1,141 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500;1,600;1,700&family=Lato:wght@300;400;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 40 33% 96%;
+    --foreground: 20 10% 15%;
+
+    --card: 40 30% 93%;
+    --card-foreground: 20 10% 15%;
+
+    --popover: 40 33% 96%;
+    --popover-foreground: 20 10% 15%;
+
+    --primary: 350 65% 35%;
+    --primary-foreground: 40 33% 96%;
+
+    --secondary: 40 50% 55%;
+    --secondary-foreground: 20 10% 15%;
+
+    --muted: 40 20% 90%;
+    --muted-foreground: 20 10% 40%;
+
+    --accent: 40 50% 55%;
+    --accent-foreground: 20 10% 15%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 40 20% 85%;
+    --input: 40 20% 85%;
+    --ring: 350 65% 35%;
+
+    --radius: 0.5rem;
+
+    --gold: 40 50% 55%;
+    --gold-light: 40 60% 75%;
+    --crimson: 350 65% 35%;
+    --crimson-deep: 350 70% 25%;
+    --ivory: 40 33% 96%;
+    --ivory-dark: 40 25% 90%;
+    --charcoal: 20 10% 15%;
+
+    --font-display: 'Playfair Display', Georgia, serif;
+    --font-body: 'Lato', 'Helvetica Neue', sans-serif;
+
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-body);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+  .text-gradient-gold {
+    background: linear-gradient(135deg, hsl(var(--gold)) 0%, hsl(var(--gold-light)) 50%, hsl(var(--gold)) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .bg-gradient-hero {
+    background: linear-gradient(
+      180deg,
+      hsl(var(--crimson-deep)) 0%,
+      hsl(var(--crimson)) 40%,
+      hsl(var(--crimson-deep)) 100%
+    );
+  }
+
+  .bg-gradient-gold {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--gold)) 0%,
+      hsl(var(--gold-light)) 100%
+    );
+  }
+
+  .ornament-line {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .ornament-line::before,
+  .ornament-line::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, hsl(var(--gold)), transparent);
+  }
+
+  /* Remove the default Google Maps InfoWindow padding/header so our custom close button sits flush with content. */
+  .gm-style-iw {
+    padding: 0 !important;
+  }
+  .gm-style-iw > button {
+    display: none !important;
+  }
+  .gm-style-iw-d {
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+  .gm-style-iw-d > div {
+    padding: 0 !important;
+  }
+  .gm-style-iw-tc {
+    display: none !important;
+  }
+  .gm-style-iw-c {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 0 !important;
+    border-radius: 8px !important;
+  }
+}

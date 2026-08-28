@@ -1,0 +1,1 @@
+GRANT SELECT (recurrence_group_id, submitted_by_user_id) ON TABLE public.calendar_events TO authenticated;

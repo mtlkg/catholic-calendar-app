@@ -1,0 +1,1 @@
+select public.dispatch_event_reminders();

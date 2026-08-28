@@ -1,0 +1,1 @@
+GRANT DELETE ON TABLE public.calendar_events TO authenticated;

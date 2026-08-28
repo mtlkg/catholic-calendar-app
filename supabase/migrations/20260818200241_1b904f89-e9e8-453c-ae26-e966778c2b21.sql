@@ -1,0 +1,1 @@
+update public.event_interests set reminder_sent_at = null where reminder_sent_at is not null and event_id in (select id from public.calendar_events where start_at > now());

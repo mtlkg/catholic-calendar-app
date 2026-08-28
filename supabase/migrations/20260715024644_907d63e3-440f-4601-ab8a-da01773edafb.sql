@@ -1,0 +1,1 @@
+REVOKE EXECUTE ON FUNCTION public.notify_followers_on_event_approved() FROM PUBLIC, anon, authenticated;

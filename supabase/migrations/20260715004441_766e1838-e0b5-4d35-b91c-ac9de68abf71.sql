@@ -1,0 +1,2 @@
+REVOKE ALL ON FUNCTION public.queue_calendar_event_geocode() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.clear_calendar_event_coordinates_on_location_change() FROM PUBLIC, anon, authenticated;

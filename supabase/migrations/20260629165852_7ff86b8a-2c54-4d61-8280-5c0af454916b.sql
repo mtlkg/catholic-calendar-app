@@ -1,0 +1,1 @@
+GRANT INSERT ON public.calendar_events TO anon;
