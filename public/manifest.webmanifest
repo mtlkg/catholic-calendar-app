@@ -1,0 +1,17 @@
+{
+  "name": "The Catholic Calendar",
+  "short_name": "Cath. Calendar",
+  "description": "Find Catholic events, feast days, retreats, Masses, and parish activities near you.",
+  "start_url": "/catholic-calendar",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8f6f1",
+  "theme_color": "#f8f6f1",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
