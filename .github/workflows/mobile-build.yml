@@ -1,0 +1,84 @@
+name: Mobile build check
+
+# Validates that the web bundle and both native shells still compile.
+# It does not sign or publish anything — real store builds are made
+# locally in Xcode / Android Studio, or in a release workflow that has
+# your signing secrets (see APP_STORE_GUIDE.md).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: placeholder
+          VITE_SUPABASE_PROJECT_ID: placeholder
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+  android:
+    needs: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: placeholder
+          VITE_SUPABASE_PROJECT_ID: placeholder
+      - run: npx cap sync android
+      - name: assembleDebug
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+        # No google-services.json in CI, so FCM won't be wired up — that's
+        # expected; this job only proves the app compiles.
+
+  ios:
+    needs: web
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: placeholder
+          VITE_SUPABASE_PROJECT_ID: placeholder
+      - run: npx cap sync ios
+      - name: Build for simulator (unsigned)
+        working-directory: ios/App
+        run: |
+          xcodebuild build \
+            -project App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO
