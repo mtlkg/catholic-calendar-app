@@ -17,6 +17,8 @@ import Dashboard from "./pages/calendar/Dashboard.tsx";
 import CalendarAdmin from "./pages/calendar/CalendarAdmin.tsx";
 import Highlights from "./pages/calendar/Highlights.tsx";
 import About from "./pages/calendar/About.tsx";
+import Privacy from "./pages/calendar/Privacy.tsx";
+import Terms from "./pages/calendar/Terms.tsx";
 // import Subscribe from "./pages/calendar/Subscribe.tsx";
 import AccountTypes from "./pages/calendar/AccountTypes.tsx";
 import CheckoutReturn from "./pages/calendar/CheckoutReturn.tsx";
@@ -45,6 +47,8 @@ const App = () => (
                   <Route path="/catholic-calendar/d/:dioceseSlug" element={<CalendarHome />} />
                   <Route path="/catholic-calendar/highlights" element={<Highlights />} />
                   <Route path="/catholic-calendar/about" element={<About />} />
+                  <Route path="/catholic-calendar/privacy" element={<Privacy />} />
+                  <Route path="/catholic-calendar/terms" element={<Terms />} />
                   <Route path="/catholic-calendar/event/:id" element={<EventDetail />} />
                   <Route path="/catholic-calendar/submit" element={<SubmitEvent />} />
                   <Route path="/catholic-calendar/organizers" element={<Organizers />} />

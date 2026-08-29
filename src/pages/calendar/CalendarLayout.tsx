@@ -202,6 +202,18 @@ export default function CalendarLayout({ children }: { children: ReactNode }) {
             >
               {t("nav.about")}
             </Link>
+            <Link
+              to="/catholic-calendar/privacy"
+              className="text-ivory/80 hover:text-gold transition-colors"
+            >
+              Privacy
+            </Link>
+            <Link
+              to="/catholic-calendar/terms"
+              className="text-ivory/80 hover:text-gold transition-colors"
+            >
+              Terms
+            </Link>
             <a
               href="mailto:globalcatholiccalendar@gmail.com"
               className="inline-flex items-center gap-2 text-gold-light hover:text-gold transition-colors"
