@@ -9,6 +9,17 @@ What's already done, and what only you can finish (it needs your own Apple/Googl
 Firebase accounts, a Mac, and real credentials I don't have access to) — laid out below
 in the order you'd actually do it.
 
+## Architecture: the app live-loads thecatholiccalendar.org
+
+`capacitor.config.ts` points the native shell at your live Lovable site
+(`server.url`) instead of bundling a snapshot of the code. Publish on Lovable,
+and the app reflects it immediately — no rebuild, no store resubmission for
+content changes. The trade-off: the native features below (push, back button,
+external links) only work once that same bridging code is also live on
+thecatholiccalendar.org, not just in this repo. **See
+[`PORT_TO_LOVABLE.md`](./PORT_TO_LOVABLE.md) — that's the first thing to do,
+before anything else in this guide.**
+
 ## What's already in the repo
 
 - **Capacitor shell** — `capacitor.config.ts`, plus generated `ios/` and `android/`
@@ -48,15 +59,19 @@ and write the listing copy, but not:
 
 ## Your next steps, in order
 
-1. **Local setup** (Part 1) — clone, install, fill in `.env`, apply the new migration.
-2. **Read the compliance note below** about in-app payments before you touch Xcode —
+1. **Port the native bridge to Lovable** ([`PORT_TO_LOVABLE.md`](./PORT_TO_LOVABLE.md))
+   — without this, the app displays your live site but push notifications and
+   native polish won't work.
+2. **Local setup** (Part 1) — clone, install, fill in `.env`, apply the new migration.
+3. **Read the compliance note below** about in-app payments before you touch Xcode —
    it affects whether the iOS build is submittable as-is.
-3. **Push notifications** (Part 2) — optional; skip and come back to it later if you'd
+4. **Push notifications** (Part 2) — optional; skip and come back to it later if you'd
    rather ship without it first.
-4. **iOS build & submit** (Part 3) — needs a Mac + Apple Developer account.
-5. **Android build & submit** (Part 4) — needs a Google Play Console account, no Mac
+5. **iOS build & submit** (Part 3) — needs a Mac + Apple Developer account.
+6. **Android build & submit** (Part 4) — needs a Google Play Console account, no Mac
    required.
-6. **Future releases** (Part 5) — version bump checklist.
+7. **Future releases** (Part 5) — version bump checklist. With live-loading, this only
+   applies to native-side changes (icons, permissions, plugins) — not routine content.
 
 ## ⚠️ Compliance note: in-app payments (read before submitting to Apple)
 

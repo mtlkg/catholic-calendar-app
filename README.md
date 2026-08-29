@@ -1,11 +1,16 @@
 # The Catholic Calendar
 
 Find Catholic events, feast days, retreats, Masses, and parish activities near you.
-Web app at [thecatholiccalendar.org](https://thecatholiccalendar.org), built with
-React, Vite, Tailwind, and Supabase. The same codebase also ships as a native iOS
-and Android app via [Capacitor](https://capacitorjs.com) — see
-[`APP_STORE_GUIDE.md`](./APP_STORE_GUIDE.md) for everything involved in shipping
-it to the App Store / Google Play, including push notification setup.
+Web app at [thecatholiccalendar.org](https://thecatholiccalendar.org), edited on
+[Lovable](https://lovable.dev). This repo wraps that live site in a
+[Capacitor](https://capacitorjs.com) native shell for the App Store / Google Play —
+the app *live-loads* thecatholiccalendar.org (see `capacitor.config.ts`
+`server.url`), so publishing on Lovable updates the app instantly with no rebuild.
+
+- **[`PORT_TO_LOVABLE.md`](./PORT_TO_LOVABLE.md)** — code that needs to exist on the
+  live site for push notifications and native polish to work. Start here.
+- **[`APP_STORE_GUIDE.md`](./APP_STORE_GUIDE.md)** — everything else involved in
+  shipping to the App Store / Google Play.
 
 ## Local development
 
