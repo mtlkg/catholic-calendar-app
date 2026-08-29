@@ -662,20 +662,512 @@ the existing viewport meta tag:
 
 ## 5. Supabase side (not Lovable frontend code)
 
-Independent of the above — needed regardless of the live-load decision:
+Independent of the frontend changes above — this needs to happen regardless
+of the live-load decision, and it's not something Lovable's project export
+touches. Two things: apply a migration, and deploy an edge function. Both
+against your actual Supabase project.
 
-- Run the migration `supabase/migrations/20260828230000_native_push_tokens.sql`
-  (adds the `push_device_tokens` table + save/delete RPCs).
-- Deploy the updated `supabase/functions/send-push/index.ts`, plus the two
-  files it imports — `supabase/functions/_shared/fcm.ts` and
-  `supabase/functions/_shared/apns.ts` — so push delivery reaches native
-  devices, not just web subscribers.
-- Add the Firebase/APNs secrets described in `APP_STORE_GUIDE.md` Part 2.
+### Migration — adds the native device token table
 
-If Lovable manages your Supabase connection, ask it to apply the migration
-and redeploy the edge function; otherwise use the Supabase CLI or dashboard
-directly. Ask if you'd like the contents of those three function files
-pasted here too, the same way as above.
+Run this against your Supabase project (SQL editor, or `supabase db push`
+with this file at `supabase/migrations/20260828230000_native_push_tokens.sql`):
+
+```sql
+-- Device tokens for the native iOS/Android app (Capacitor push notifications),
+-- parallel to public.push_subscriptions which holds web push subscriptions.
+CREATE TABLE IF NOT EXISTS public.push_device_tokens (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid,
+  platform text NOT NULL CHECK (platform IN ('ios', 'android')),
+  token text NOT NULL UNIQUE,
+  locale text NOT NULL DEFAULT 'en',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz NOT NULL DEFAULT now()
+);
+
+GRANT ALL ON public.push_device_tokens TO service_role;
+ALTER TABLE public.push_device_tokens ENABLE ROW LEVEL SECURITY;
+
+CREATE INDEX IF NOT EXISTS idx_push_device_tokens_user ON public.push_device_tokens(user_id);
+
+CREATE OR REPLACE FUNCTION public.save_native_push_token(
+  _token text, _platform text, _locale text DEFAULT 'en'
+) RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF _token IS NULL OR _token = '' OR _platform NOT IN ('ios', 'android') THEN
+    RAISE EXCEPTION 'invalid device token';
+  END IF;
+  INSERT INTO public.push_device_tokens (user_id, platform, token, locale)
+  VALUES (auth.uid(), _platform, _token, COALESCE(NULLIF(_locale,''),'en'))
+  ON CONFLICT (token) DO UPDATE SET
+    user_id = COALESCE(auth.uid(), public.push_device_tokens.user_id),
+    platform = EXCLUDED.platform,
+    locale = EXCLUDED.locale,
+    last_seen_at = now();
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.delete_native_push_token(_token text)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  DELETE FROM public.push_device_tokens WHERE token = _token;
+$$;
+
+REVOKE ALL ON FUNCTION public.save_native_push_token(text, text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.delete_native_push_token(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.save_native_push_token(text, text, text) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.delete_native_push_token(text) TO anon, authenticated, service_role;
+```
+
+### `supabase/functions/send-push/index.ts` — replace with this
+
+```ts
+// Shared web push sender. Internal-only: callable by the service role (other
+// edge functions / database triggers). Looks up the target subscriptions,
+// renders localized copy, encrypts and delivers each message, and prunes
+// subscriptions the push service reports as gone.
+
+import { createClient } from "npm:@supabase/supabase-js@2";
+import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
+import { normalizeLocale, renderPush, type PushTemplate } from "../_shared/push-templates.ts";
+import { sendWebPush } from "../_shared/webpush.ts";
+import { loadServiceAccount, sendFcm } from "../_shared/fcm.ts";
+import { loadApnsConfig, sendApns } from "../_shared/apns.ts";
+
+function isInternalCaller(req: Request): boolean {
+  const auth = req.headers.get("Authorization") || req.headers.get("authorization") || "";
+  if (!auth.startsWith("Bearer ")) return false;
+  const token = auth.slice(7).trim();
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  if (serviceKey && token === serviceKey) return true;
+  try {
+    const [, payload] = token.split(".");
+    const b64 = payload.replace(/-/g, "+").replace(/_/g, "/") +
+      "==".slice(0, (4 - (payload.length % 4)) % 4);
+    return JSON.parse(atob(b64)).role === "service_role";
+  } catch {
+    return false;
+  }
+}
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (!isInternalCaller(req)) return json({ error: "forbidden" }, 403);
+
+  let payload: any;
+  try {
+    payload = await req.json();
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
+
+  const template = String(payload?.templateName ?? "") as PushTemplate;
+  const locale = normalizeLocale(payload?.locale);
+  const data = (payload?.templateData ?? {}) as Record<string, string>;
+  const url = String(payload?.url ?? "https://thecatholiccalendar.org/catholic-calendar");
+  const userId: string | null = payload?.userId ?? null;
+  const endpoints: string[] = Array.isArray(payload?.endpoints) ? payload.endpoints : [];
+
+  const deviceTokens: string[] = Array.isArray(payload?.deviceTokens) ? payload.deviceTokens : [];
+
+  if (!template) return json({ error: "templateName required" }, 400);
+  if (!userId && endpoints.length === 0 && deviceTokens.length === 0) {
+    return json({ ok: true, skipped: "no_target" });
+  }
+
+  const privateJwkRaw = Deno.env.get("VAPID_PRIVATE_JWK");
+  const publicKey = Deno.env.get("VAPID_PUBLIC_KEY");
+  const subject = Deno.env.get("VAPID_SUBJECT") || "mailto:globalcatholiccalendar@gmail.com";
+  const privateJwk = privateJwkRaw ? (JSON.parse(privateJwkRaw) as JsonWebKey) : null;
+  const webPushReady = !!(privateJwk && publicKey);
+
+  const fcmServiceAccount = loadServiceAccount();
+  const apnsConfig = loadApnsConfig();
+  if (!webPushReady && !fcmServiceAccount && !apnsConfig) {
+    console.error("send-push: no push provider is configured (web, FCM, or APNs)");
+    return json({ error: "push not configured" }, 503);
+  }
+
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
+  const subs = new Map<string, { endpoint: string; p256dh: string; auth: string; locale: string }>();
+  if (userId) {
+    const { data: rows } = await supabase
+      .from("push_subscriptions")
+      .select("endpoint, p256dh, auth, locale")
+      .eq("user_id", userId);
+    for (const r of rows ?? []) subs.set((r as any).endpoint, r as any);
+  }
+  if (endpoints.length > 0) {
+    const { data: rows } = await supabase
+      .from("push_subscriptions")
+      .select("endpoint, p256dh, auth, locale")
+      .in("endpoint", endpoints);
+    for (const r of rows ?? []) subs.set((r as any).endpoint, r as any);
+  }
+
+  const devices = new Map<string, { token: string; platform: "ios" | "android"; locale: string }>();
+  if (userId) {
+    const { data: rows } = await supabase
+      .from("push_device_tokens")
+      .select("token, platform, locale")
+      .eq("user_id", userId);
+    for (const r of rows ?? []) devices.set((r as any).token, r as any);
+  }
+  if (deviceTokens.length > 0) {
+    const { data: rows } = await supabase
+      .from("push_device_tokens")
+      .select("token, platform, locale")
+      .in("token", deviceTokens);
+    for (const r of rows ?? []) devices.set((r as any).token, r as any);
+  }
+
+  if (subs.size === 0 && devices.size === 0) return json({ ok: true, skipped: "no_subscriptions" });
+
+  let sent = 0;
+  const deadEndpoints: string[] = [];
+  const deadTokens: string[] = [];
+  const errors: unknown[] = [];
+  const tag = `${template}-${data.id ?? ""}`;
+
+  const buildOrNull = (loc: ReturnType<typeof normalizeLocale>) => {
+    try {
+      return renderPush(template, loc, data);
+    } catch (err) {
+      errors.push({ error: (err as Error).message });
+      return null;
+    }
+  };
+
+  if (webPushReady) {
+    for (const sub of subs.values()) {
+      const built = buildOrNull(normalizeLocale(payload?.locale ?? sub.locale) ?? locale);
+      if (!built) continue;
+      try {
+        const res = await sendWebPush(sub, { title: built.title, body: built.body, url, tag }, {
+          privateJwk: privateJwk!,
+          publicKey: publicKey!,
+          subject,
+        });
+        if (res.ok) sent++;
+        else if (res.gone) deadEndpoints.push(sub.endpoint);
+        else errors.push({ endpoint: sub.endpoint, status: res.status, body: res.body });
+      } catch (err) {
+        errors.push({ endpoint: sub.endpoint, error: String(err) });
+      }
+    }
+  } else if (subs.size > 0) {
+    console.warn("send-push: web subscriptions present but VAPID keys are not configured");
+  }
+
+  for (const device of devices.values()) {
+    const built = buildOrNull(normalizeLocale(payload?.locale ?? device.locale) ?? locale);
+    if (!built) continue;
+    try {
+      if (device.platform === "android") {
+        if (!fcmServiceAccount) continue;
+        const res = await sendFcm(fcmServiceAccount, device.token, { title: built.title, body: built.body, url, tag });
+        if (res.ok) sent++;
+        else if (res.gone) deadTokens.push(device.token);
+        else errors.push({ token: device.token, status: res.status, body: res.body });
+      } else {
+        if (!apnsConfig) continue;
+        const res = await sendApns(apnsConfig, device.token, { title: built.title, body: built.body, url, tag });
+        if (res.ok) sent++;
+        else if (res.gone) deadTokens.push(device.token);
+        else errors.push({ token: device.token, status: res.status, body: res.body });
+      }
+    } catch (err) {
+      errors.push({ token: device.token, error: String(err) });
+    }
+  }
+
+  if (deadEndpoints.length > 0) {
+    await supabase.from("push_subscriptions").delete().in("endpoint", deadEndpoints);
+  }
+  if (deadTokens.length > 0) {
+    await supabase.from("push_device_tokens").delete().in("token", deadTokens);
+  }
+
+  return json({
+    ok: true,
+    sent,
+    pruned: deadEndpoints.length + deadTokens.length,
+    errors: errors.slice(0, 5),
+  });
+});
+```
+
+### `supabase/functions/_shared/fcm.ts` — new file
+
+```ts
+// Firebase Cloud Messaging (HTTP v1) sender for the Android native app.
+// Auth is a service-account JWT exchanged for a short-lived OAuth2 access
+// token — no external dependency, just WebCrypto + fetch.
+
+import { bytesToB64url } from "./webpush.ts";
+
+const enc = new TextEncoder();
+
+type ServiceAccount = {
+  project_id: string;
+  client_email: string;
+  private_key: string;
+};
+
+function pemToArrayBuffer(pem: string): ArrayBuffer {
+  const b64 = pem
+    .replace(/-----BEGIN [^-]+-----/, "")
+    .replace(/-----END [^-]+-----/, "")
+    .replace(/\s+/g, "");
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+let cachedToken: { value: string; expiresAt: number } | null = null;
+
+async function getAccessToken(sa: ServiceAccount): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedToken && cachedToken.expiresAt - 60 > now) return cachedToken.value;
+
+  const header = { alg: "RS256", typ: "JWT" };
+  const claims = {
+    iss: sa.client_email,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  };
+  const unsigned = `${bytesToB64url(enc.encode(JSON.stringify(header)))}.${
+    bytesToB64url(enc.encode(JSON.stringify(claims)))
+  }`;
+
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    pemToArrayBuffer(sa.private_key),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, enc.encode(unsigned)),
+  );
+  const jwt = `${unsigned}.${bytesToB64url(sig)}`;
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`FCM token exchange failed: ${res.status} ${await res.text()}`);
+  }
+  const body = await res.json();
+  cachedToken = { value: body.access_token, expiresAt: now + (body.expires_in ?? 3600) };
+  return cachedToken.value;
+}
+
+export type FcmResult = { ok: boolean; gone?: boolean; status?: number; body?: string };
+
+/** Sends one FCM notification to an Android device registration token. */
+export async function sendFcm(
+  sa: ServiceAccount,
+  token: string,
+  payload: { title: string; body: string; url: string; tag?: string },
+): Promise<FcmResult> {
+  const accessToken = await getAccessToken(sa);
+  const res = await fetch(
+    `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: {
+          token,
+          notification: { title: payload.title, body: payload.body },
+          data: { url: payload.url, tag: payload.tag ?? "" },
+          android: { priority: "high", notification: { tag: payload.tag } },
+        },
+      }),
+    },
+  );
+  if (res.ok) return { ok: true };
+  const text = await res.text();
+  const gone = res.status === 404 || res.status === 400 && /UNREGISTERED|INVALID_ARGUMENT/.test(text);
+  return { ok: false, gone, status: res.status, body: text };
+}
+
+export function loadServiceAccount(): ServiceAccount | null {
+  const raw = Deno.env.get("FCM_SERVICE_ACCOUNT_JSON");
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed.project_id || !parsed.client_email || !parsed.private_key) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+```
+
+### `supabase/functions/_shared/apns.ts` — new file
+
+```ts
+// Apple Push Notification service (HTTP/2 provider API) sender for the iOS
+// native app. Auth is a token signed with the account's APNs Auth Key
+// (.p8, ES256) — no Firebase involvement needed for iOS.
+
+import { bytesToB64url } from "./webpush.ts";
+
+const enc = new TextEncoder();
+
+type ApnsConfig = {
+  keyId: string;
+  teamId: string;
+  bundleId: string;
+  privateKeyPem: string;
+  production: boolean;
+};
+
+function pemToArrayBuffer(pem: string): ArrayBuffer {
+  const b64 = pem
+    .replace(/-----BEGIN [^-]+-----/, "")
+    .replace(/-----END [^-]+-----/, "")
+    .replace(/\s+/g, "");
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+let cachedJwt: { value: string; expiresAt: number; keyId: string } | null = null;
+
+async function getProviderToken(cfg: ApnsConfig): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedJwt && cachedJwt.keyId === cfg.keyId && cachedJwt.expiresAt - 300 > now) {
+    return cachedJwt.value;
+  }
+
+  const header = { alg: "ES256", kid: cfg.keyId };
+  const claims = { iss: cfg.teamId, iat: now };
+  const unsigned = `${bytesToB64url(enc.encode(JSON.stringify(header)))}.${
+    bytesToB64url(enc.encode(JSON.stringify(claims)))
+  }`;
+
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    pemToArrayBuffer(cfg.privateKeyPem),
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"],
+  );
+  // WebCrypto's ECDSA signature is already raw r||s (IEEE P1363), which is
+  // exactly what JWS ES256 expects — no DER conversion needed.
+  const sig = new Uint8Array(
+    await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, enc.encode(unsigned)),
+  );
+  const jwt = `${unsigned}.${bytesToB64url(sig)}`;
+  cachedJwt = { value: jwt, expiresAt: now + 3300, keyId: cfg.keyId };
+  return jwt;
+}
+
+export type ApnsResult = { ok: boolean; gone?: boolean; status?: number; body?: string };
+
+/** Sends one APNs alert to an iOS device token. */
+export async function sendApns(
+  cfg: ApnsConfig,
+  deviceToken: string,
+  payload: { title: string; body: string; url: string; tag?: string },
+): Promise<ApnsResult> {
+  const host = cfg.production ? "api.push.apple.com" : "api.sandbox.push.apple.com";
+  const jwt = await getProviderToken(cfg);
+
+  const res = await fetch(`https://${host}/3/device/${deviceToken}`, {
+    method: "POST",
+    headers: {
+      authorization: `bearer ${jwt}`,
+      "apns-topic": cfg.bundleId,
+      "apns-push-type": "alert",
+      "apns-priority": "10",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      aps: {
+        alert: { title: payload.title, body: payload.body },
+        sound: "default",
+        "thread-id": payload.tag ?? "",
+      },
+      url: payload.url,
+    }),
+  });
+  if (res.ok) return { ok: true };
+  const text = await res.text();
+  const gone = res.status === 410 ||
+    (res.status === 400 && /BadDeviceToken/.test(text));
+  return { ok: false, gone, status: res.status, body: text };
+}
+
+export function loadApnsConfig(): ApnsConfig | null {
+  const keyId = Deno.env.get("APNS_KEY_ID");
+  const teamId = Deno.env.get("APNS_TEAM_ID");
+  const bundleId = Deno.env.get("APNS_BUNDLE_ID");
+  const privateKeyPem = Deno.env.get("APNS_PRIVATE_KEY");
+  if (!keyId || !teamId || !bundleId || !privateKeyPem) return null;
+  const production = Deno.env.get("APNS_PRODUCTION") !== "false";
+  return { keyId, teamId, bundleId, privateKeyPem, production };
+}
+```
+
+Deploy after adding the files: `supabase functions deploy send-push` (or
+however Lovable triggers an edge function redeploy).
+
+### Secrets — I can't paste these, only their names
+
+Everything above is code I can hand you outright. The secrets below are
+different: each one is a credential tied to *your* Firebase project and *your*
+Apple Developer account, generated on services I have no access to. I can't
+fabricate working values for them — pasting anything here would just be
+made up and wouldn't deliver a single push notification. What I can give you
+is the exact name each secret needs (the code above reads these exact
+`Deno.env.get(...)` keys) and precisely where to get the real value. Full
+walkthrough is in `APP_STORE_GUIDE.md` Part 2; short version:
+
+| Secret name | Where it comes from |
+|---|---|
+| `FCM_SERVICE_ACCOUNT_JSON` | Firebase Console → your project → Project Settings → Service Accounts → **Generate new private key**. Paste the entire downloaded JSON file as the value. |
+| `APNS_KEY_ID` | Apple Developer → Certificates, Identifiers & Profiles → Keys → the APNs key you create → shown on its detail page. |
+| `APNS_TEAM_ID` | Apple Developer portal, top-right, or the Membership page. |
+| `APNS_BUNDLE_ID` | `org.thecatholiccalendar.app` — this one I *can* give you, it's fixed by the app's config, not a generated credential. |
+| `APNS_PRIVATE_KEY` | The full contents of the `.p8` file Apple lets you download once when creating the APNs key — including the `-----BEGIN PRIVATE KEY-----` / `-----END PRIVATE KEY-----` lines. |
+| `APNS_PRODUCTION` | `false` while testing with a development/Xcode build (uses Apple's sandbox APNs server), `true` once you're shipping TestFlight/App Store builds. |
+
+Set these in Supabase → Edge Functions → Secrets (or ask Lovable to, if it
+manages that for you). Android push needs only the Firebase one; iOS push
+needs the four `APNS_*` ones — you can do either independently, or both.
 
 ## 6. One thing to know about App Store review
 
