@@ -18,6 +18,15 @@ in the order you'd actually do it.
 - **Native push notifications** — full client + server wiring (device registration,
   Supabase table, FCM/APNs delivery in the `send-push` edge function). It just needs
   your Firebase project and Apple push key plugged in (Part 2 below).
+- **Privacy Policy & Terms of Use pages** — live at `/catholic-calendar/privacy` and
+  `/catholic-calendar/terms`, linked from the site footer. Both stores require the
+  privacy URL before they'll accept a submission.
+- **Android release signing** — `android/app/build.gradle` reads
+  `android/key.properties` and signs `bundleRelease` automatically once you drop
+  your upload keystore in (Part 4).
+- **Store listing copy** — [`APP_STORE_LISTING.md`](./APP_STORE_LISTING.md) has
+  ready-to-paste name/description/keywords and the App Privacy / Data Safety
+  questionnaire answers for both consoles.
 - **PWA manifest** — the *website* is now separately installable to a home screen
   straight from a browser, no app store needed, as a bonus.
 - **CI** (`.github/workflows/mobile-build.yml`) — builds the web bundle, an Android
@@ -28,15 +37,51 @@ in the order you'd actually do it.
 
 This session runs in a sandboxed Linux container with no Mac (iOS builds require
 Xcode, which only runs on macOS), no Apple/Google developer accounts, and no access to
-your Firebase project. Concretely, I could generate and validate the *project files*,
-but not:
+your Firebase project. Concretely, I could generate and validate the *project files*
+and write the listing copy, but not:
 
 - Compile a final signed `.ipa` / `.aab`
 - Create the App Store Connect / Google Play Console listings
 - Set up your Firebase project or Apple push key
+- Take real device/simulator screenshots for the store listings
 - Submit anything for review
 
-Everything below is what's left, in order.
+## Your next steps, in order
+
+1. **Local setup** (Part 1) — clone, install, fill in `.env`, apply the new migration.
+2. **Read the compliance note below** about in-app payments before you touch Xcode —
+   it affects whether the iOS build is submittable as-is.
+3. **Push notifications** (Part 2) — optional; skip and come back to it later if you'd
+   rather ship without it first.
+4. **iOS build & submit** (Part 3) — needs a Mac + Apple Developer account.
+5. **Android build & submit** (Part 4) — needs a Google Play Console account, no Mac
+   required.
+6. **Future releases** (Part 5) — version bump checklist.
+
+## ⚠️ Compliance note: in-app payments (read before submitting to Apple)
+
+The app has a paid "Verified Organizer" subscription ($10/mo or $100/yr — see
+`src/pages/calendar/AccountTypes.tsx`) and a paid event-promotion checkout
+(`src/pages/calendar/SubmitEvent.tsx`), both currently built on **Stripe**. Apple's
+App Store Review Guideline 3.1.1 requires **Apple's own In-App Purchase (StoreKit)**,
+not an external processor like Stripe, for anything that unlocks digital
+features/content *within* the app — which the Verified Organizer subscription is.
+
+The good news: the subscription purchase flow (`/catholic-calendar/subscribe`) is
+already disabled in the app's routing — `App.tsx` redirects it to the dashboard
+("kept as redirect so links don't 404"). **Leave it that way for the iOS build.**
+As long as nothing in the iOS app lets someone buy the digital subscription via
+Stripe, this shouldn't trigger a 3.1.1 rejection. Paying to promote a real, external
+event (the SubmitEvent checkout) is more likely to be treated as a real-world
+service and is lower risk, but Apple's reviewers are inconsistent here — if they
+flag it, the fix is either to gate that checkout out of the iOS build too, or to
+implement it with StoreKit. Google Play has no equivalent restriction — Stripe is
+fine there.
+
+If you want the Verified Organizer subscription sellable *inside* the iOS app,
+that requires implementing Apple In-App Purchase specifically for iOS (a real
+scope of work — new StoreKit product IDs, receipt validation, reconciling it with
+the existing Stripe-based entitlement system). Ask if you want that built.
 
 ---
 
@@ -121,15 +166,16 @@ repo with signing secrets to build + upload via `fastlane` on GitHub's macOS run
 4. **Product → Archive**, then **Distribute App → App Store Connect → Upload**.
 5. In [App Store Connect](https://appstoreconnect.apple.com), create the app:
    - **My Apps → + → New App**, bundle ID `org.thecatholiccalendar.app`.
-   - Fill in name, description, category, keywords.
+   - Name/subtitle/description/keywords — paste from
+     [`APP_STORE_LISTING.md`](./APP_STORE_LISTING.md).
    - Screenshots: capture from the Simulator or a real device at the required sizes
      (currently 6.7" iPhone at minimum; add iPad screenshots if you want iPad
      support). The generated app icon/splash aren't a substitute for real
      in-app screenshots here.
-   - **App Privacy** section: declare what's collected — this app collects
-     location (event search), email (accounts), and user content (messages,
-     event submissions), so answer accordingly.
-   - **Privacy Policy URL** — required. See Part 5 below; you don't have one yet.
+   - **App Privacy** section: answers are in `APP_STORE_LISTING.md`.
+   - **Privacy Policy URL**: `https://thecatholiccalendar.org/catholic-calendar/privacy`
+   - **Age rating questionnaire**: see "Content rating" in `APP_STORE_LISTING.md` —
+     unmoderated user content can push this to 17+.
    - Attach the uploaded build, submit for review.
 
 ## Part 4 — Android: build & submit
@@ -142,41 +188,25 @@ one-time). This part can be done from any OS, no Mac required.
    keytool -genkeypair -v -keystore upload-keystore.jks \
      -alias upload -keyalg RSA -keysize 2048 -validity 10000
    ```
-2. Reference it from `android/key.properties` (gitignored — don't commit it):
-   ```properties
-   storeFile=/absolute/path/to/upload-keystore.jks
-   storePassword=...
-   keyAlias=upload
-   keyPassword=...
-   ```
-   and wire that into `android/app/build.gradle`'s `signingConfigs` /
-   `buildTypes.release` — the standard Capacitor/Android release-signing snippet,
-   documented at [developer.android.com/studio/publish/app-signing](https://developer.android.com/studio/publish/app-signing).
+2. Copy `android/key.properties.example` to `android/key.properties` (gitignored)
+   and fill in the keystore path + passwords from step 1. `build.gradle` already
+   reads this file and signs the release build automatically once it's present —
+   nothing else to wire up.
 3. Build the release bundle:
    ```bash
    cd android && ./gradlew bundleRelease
    # output: android/app/build/outputs/bundle/release/app-release.aab
    ```
-4. In Play Console: **Create app**, fill in the store listing, screenshots (phone
-   screenshots required, tablet optional), content rating questionnaire, **Data
-   safety** form (same data categories as the iOS privacy section above), and a
-   **Privacy Policy URL**.
+4. In Play Console: **Create app**, then paste in the listing copy and Data
+   Safety answers from [`APP_STORE_LISTING.md`](./APP_STORE_LISTING.md). Add
+   screenshots (phone required, tablet optional), the content rating
+   questionnaire, and the privacy policy URL:
+   `https://thecatholiccalendar.org/catholic-calendar/privacy`.
 5. Upload the `.aab` to an **Internal testing** track first, test it on a real
    device, then promote to **Production** when ready. First-time review can take
    a few days.
 
-## Part 5 — Privacy policy (needed for both stores)
-
-I didn't find an existing privacy policy page on thecatholiccalendar.org — both
-app stores require a **public URL** to one before they'll accept the app,
-since it handles accounts, location, and user-submitted content. You'll need to
-either add a `/privacy` page to the site or host one elsewhere (e.g. a simple
-page describing what data is collected — email, location, event/message
-content — and how it's used/stored via Supabase). Happy to draft one if you tell
-me what to say about data retention and any third parties (Stripe, Google Maps,
-etc.) it should disclose.
-
-## Part 6 — Ongoing releases
+## Part 5 — Ongoing releases
 
 Each new submission needs a version bump:
 
